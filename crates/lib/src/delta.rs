@@ -97,6 +97,8 @@ pub(crate) struct Delta {
     pub(crate) path: Utf8PathBuf,
     /// Parsed information about the delta.
     pub(crate) parsed: ParsedDelta,
+    config: ImageConfiguration,
+    layout: Layout,
 }
 
 impl Delta {
@@ -107,11 +109,20 @@ impl Delta {
         let layout = Layout::open(path)?;
         let parsed = parse(&layout).await?;
 
-        validate(&parsed)?;
+        let config = validate(&parsed)?;
         Ok(Self {
             path: path.to_owned(),
             parsed,
+            config,
+            layout,
         })
+    }
+
+    /// Open the patch blob `desc`
+    pub(crate) fn read_patch(&self, desc: &Descriptor) -> Result<Box<dyn BlobStream>> {
+        self.layout
+            .read_blob(desc)
+            .with_context(|| format!("Reading delta patch {}", desc.digest()))
     }
 
     /// The digest of the target image's manifest, as recorded in the delta.
@@ -146,6 +157,11 @@ impl Delta {
     /// The target image's manifest.
     pub(crate) fn target_manifest(&self) -> &ImageManifest {
         &self.parsed.target_manifest
+    }
+
+    /// The target image's config.
+    pub(crate) fn target_config(&self) -> &ImageConfiguration {
+        &self.config
     }
 
     /// The config digest of the image this delta was built against.
@@ -196,14 +212,6 @@ pub(crate) async fn open_opt(path: Option<&Utf8Path>) -> Result<Option<Delta>> {
     }
 }
 
-/// Reject `--from-delta` on a storage backend that cannot apply one yet.
-pub(crate) fn reject_unsupported(path: Option<&Utf8Path>) -> Result<()> {
-    match path {
-        Some(path) => bail!("--from-delta ({path}) is not supported by the ostree backend yet"),
-        None => Ok(()),
-    }
-}
-
 /// Reject `--from-delta` for an image that also has to be in containers-storage.
 pub(crate) fn reject_unified_storage(delta: &Delta, use_unified: bool) -> Result<()> {
     ensure!(
@@ -215,7 +223,7 @@ pub(crate) fn reject_unified_storage(delta: &Delta, use_unified: bool) -> Result
 }
 
 /// Check the delta's internal consistency, to fail early
-fn validate(p: &ParsedDelta) -> Result<()> {
+fn validate(p: &ParsedDelta) -> Result<ImageConfiguration> {
     verify_digest(
         "Embedded target manifest",
         &p.target_manifest_raw,
@@ -253,7 +261,7 @@ fn validate(p: &ParsedDelta) -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(config)
 }
 
 /// Read the single manifest out of an OCI layout and parse it as a delta.
@@ -635,13 +643,6 @@ pub(crate) mod tests {
                 assert!(error.contains(&target.to_string()), "{error}");
             }
         }
-    }
-
-    #[test]
-    fn test_reject_unsupported() {
-        reject_unsupported(None).unwrap();
-        let err = reject_unsupported(Some(Utf8Path::new("/d"))).unwrap_err();
-        assert!(format!("{err:#}").contains("ostree backend"));
     }
 
     #[test]
