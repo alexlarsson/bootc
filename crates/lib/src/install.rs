@@ -175,6 +175,8 @@ use clap::ValueEnum;
 use fn_error_context::context;
 use linux_kernel_cmdline::utf8::{Cmdline, CmdlineOwned};
 use ostree::gio;
+#[cfg(feature = "install-to-disk")]
+use ostree::prelude::*;
 use ostree_ext::ostree;
 use ostree_ext::ostree_prepareroot::{ComposefsState, Tristate};
 use ostree_ext::prelude::Cast;
@@ -469,6 +471,23 @@ pub(crate) struct InstallToDiskOpts {
     pub(crate) composefs_opts: InstallComposefsOpts,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AbootDiskLayout {
+    Android,
+    Ukiboot,
+}
+
+impl AbootDiskLayout {
+    fn from_image_type(image_type: crate::kernel::ContainerImageType) -> Option<Self> {
+        use crate::kernel::ContainerImageType;
+        match image_type {
+            ContainerImageType::Aboot => Some(Self::Android),
+            ContainerImageType::AbootEfi => Some(Self::Ukiboot),
+            _ => None,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ReplaceMode {
@@ -679,6 +698,8 @@ pub(crate) struct State {
     pub(crate) composefs_options: InstallComposefsOpts,
     pub(crate) composefs_fsverity_supported: bool,
     pub(crate) allow_missing_verity_explicit: bool,
+    #[cfg(feature = "install-to-disk")]
+    pub(crate) aboot_disk_layout: Option<AbootDiskLayout>,
 }
 
 // Shared read-only global state
@@ -1107,6 +1128,64 @@ async fn pull_ostree_install_from_prepared(
     }
 }
 
+#[cfg(feature = "install-to-disk")]
+fn commit_has_aboot_artifact(root: &gio::File) -> Result<bool> {
+    let modules = root.resolve_relative_path("usr/lib/modules");
+    if modules.query_exists(gio::Cancellable::NONE) {
+        let entries = modules.enumerate_children(
+            "standard::name,standard::type",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            gio::Cancellable::NONE,
+        )?;
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type() != gio::FileType::Directory {
+                continue;
+            }
+            let aboot = modules.child(entry.name()).child("aboot.img");
+            if aboot.query_exists(gio::Cancellable::NONE)
+                && aboot
+                    .query_info(
+                        "standard::type",
+                        gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                        gio::Cancellable::NONE,
+                    )?
+                    .file_type()
+                    == gio::FileType::Regular
+            {
+                return Ok(true);
+            }
+        }
+    }
+    let boot = root.resolve_relative_path("boot");
+    if !boot.query_exists(gio::Cancellable::NONE) {
+        return Ok(false);
+    }
+    let entries = boot.enumerate_children(
+        "standard::name,standard::type",
+        gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+        gio::Cancellable::NONE,
+    )?;
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type() != gio::FileType::Regular {
+            continue;
+        }
+        let name = entry.name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name
+            .strip_prefix("aboot-")
+            .and_then(|name| name.strip_suffix(".img"))
+            .is_some_and(|version| !version.is_empty())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[context("Creating ostree deployment")]
 async fn install_container(
     state: &State,
@@ -1196,7 +1275,17 @@ async fn install_container(
 
     // If the target uses aboot, then we need to set that bootloader in the ostree
     // config before deploying the commit
-    if ostree_ext::bootabletree::commit_has_aboot_img(&merged_ostree_root, None)? {
+    let has_aboot_img = ostree_ext::bootabletree::commit_has_aboot_img(&merged_ostree_root, None)?;
+    #[cfg(feature = "install-to-disk")]
+    if root_setup.disk_install
+        && !state.source.in_host_mountns
+        && (has_aboot_img || commit_has_aboot_artifact(&merged_ostree_root)?)
+    {
+        anyhow::bail!(
+            "aboot to-disk install with --source-imgref is unsupported; run from the aboot image"
+        );
+    }
+    if has_aboot_img {
         tracing::debug!("Setting bootloader to aboot");
         Command::new("ostree")
             .args([
@@ -1395,6 +1484,8 @@ pub(crate) struct RootSetup {
     /// Target root path /target.
     pub(crate) target_root_path: Option<Utf8PathBuf>,
     pub(crate) rootfs_uuid: Option<String>,
+    pub(crate) aboot_disk_layout: Option<AbootDiskLayout>,
+    pub(crate) disk_install: bool,
     /// True if we should skip finalizing
     skip_finalize: bool,
     boot: Option<MountSpec>,
@@ -1640,6 +1731,7 @@ async fn prepare_install(
     mut target_opts: InstallTargetOpts,
     mut composefs_options: InstallComposefsOpts,
     target_fs: Option<FilesystemEnum>,
+    detect_aboot_layout: bool,
 ) -> Result<Arc<State>> {
     tracing::trace!("Preparing install");
     let allow_missing_verity_explicit = composefs_options.allow_missing_verity;
@@ -1839,6 +1931,19 @@ async fn prepare_install(
         reexecute_self_for_selinux_if_needed(&source, config_opts.disable_selinux, &reexec_env)?;
     tracing::debug!("SELinux state: {selinux_state:?}");
 
+    let aboot_disk_layout = if detect_aboot_layout && !external_source {
+        crate::kernel::find_aboot_type(&rootfs)?.and_then(AbootDiskLayout::from_image_type)
+    } else {
+        None
+    };
+    if aboot_disk_layout.is_some() {
+        composefs_options.composefs_backend = true;
+    }
+    ensure!(
+        config_opts.bootloader != Some(Bootloader::Ukiboot) || composefs_options.composefs_backend,
+        "ukiboot requires --composefs-backend"
+    );
+
     println!("Installing image: {:#}", &target_imgref);
     if let Some(digest) = source.digest.as_deref() {
         println!("Digest: {digest}");
@@ -1936,6 +2041,8 @@ async fn prepare_install(
             .map(|fs| fs.supports_fsverity())
             .unwrap_or(true),
         allow_missing_verity_explicit,
+        #[cfg(feature = "install-to-disk")]
+        aboot_disk_layout,
     });
 
     Ok(state)
@@ -2336,6 +2443,7 @@ pub(crate) async fn install_to_disk(mut opts: InstallToDiskOpts) -> Result<()> {
         opts.target_opts,
         opts.composefs_opts,
         block_opts.filesystem,
+        true,
     )
     .await?;
 
@@ -2723,6 +2831,7 @@ pub(crate) async fn install_to_filesystem(
         opts.target_opts,
         opts.composefs_opts,
         Some(inspect.fstype.as_str().try_into()?),
+        false,
     )
     .await?;
 
@@ -2881,6 +2990,8 @@ pub(crate) async fn install_to_filesystem(
         physical_root: rootfs_fd,
         target_root_path: Some(target_root_path.clone()),
         rootfs_uuid: inspect.uuid.clone(),
+        aboot_disk_layout: None,
+        disk_install: false,
         boot,
         kargs,
         skip_finalize,
@@ -3123,6 +3234,22 @@ pub(crate) async fn install_finalize(target: &Utf8Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "install-to-disk")]
+    #[test]
+    fn finds_aboot_artifact_in_commit() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        std::fs::create_dir(tempdir.path().join("boot"))?;
+        let root = gio::File::for_path(tempdir.path());
+        assert!(!commit_has_aboot_artifact(&root)?);
+        std::fs::write(tempdir.path().join("boot/aboot-1.img"), b"image")?;
+        assert!(commit_has_aboot_artifact(&root)?);
+        std::fs::remove_file(tempdir.path().join("boot/aboot-1.img"))?;
+        std::fs::create_dir_all(tempdir.path().join("usr/lib/modules/1"))?;
+        std::fs::write(tempdir.path().join("usr/lib/modules/1/aboot.img"), b"image")?;
+        assert!(commit_has_aboot_artifact(&root)?);
+        Ok(())
+    }
 
     #[test]
     fn test_composefs_opts_validate() {

@@ -39,6 +39,15 @@ The root partition uses an architecture-specific DPS type GUID. Specific partiti
 sizes and type GUIDs are implementation details that may change between versions;
 use `install to-filesystem` if you need precise control over the partition layout.
 
+For aboot images, the installer recognizes the boot artifact when installing from the
+running container and selects one of two A/B layouts. The `android` layout uses `boot_a`,
+`boot_b`, `vbmeta_a`, `vbmeta_b`, and `system_a` partitions, without an ESP. The `ukiboot`
+layout uses an ESP, `ukiboot_a`, `ukiboot_b`, `ukibootctl`, and `root`. Additionally the
+aboot artifact is written to the boot partitions.  If a complete aboot layout from the
+running installer's `repart.d` definition exists, then it is used instead of the built in
+ones. The built in partition layouts are not intended as universal layouts for all
+possible aboot hardware, but work at least for virtualized testing.
+
 ### Root filesystem discovery
 
 The root partition can be discovered at boot time in two ways:
