@@ -70,10 +70,11 @@ use crate::{
 pub(crate) async fn is_image_pulled(
     repo: &ComposefsRepository,
     imgref: &ImageReference,
+    storage: &Storage,
 ) -> Result<(Option<Sha512HashValue>, ImgConfigManifest, String)> {
     let imgref_repr = imgref.to_image_proxy_ref()?;
     let (img_config_manifest, manifest_digest) =
-        get_container_manifest_and_config(&imgref_repr).await?;
+        get_container_manifest_and_config(&imgref_repr, Some(storage)).await?;
 
     let container_pulled =
         lookup_config_splitstream(repo, img_config_manifest.manifest.config().digest())?;
@@ -690,7 +691,7 @@ pub(crate) async fn upgrade_composefs(
                 delta.target_manifest_digest().to_string(),
             )
         }
-        None => is_image_pulled(&repo, booted_imgref)
+        None => is_image_pulled(&repo, booted_imgref, storage)
             .await
             .map(|(pulled, img, digest)| (pulled, img.manifest, digest))?,
     };
@@ -723,7 +724,8 @@ pub(crate) async fn upgrade_composefs(
         // Switch takes precedence over update, so we change the imgref
         booted_imgref = &staged_image.image;
 
-        let (img_pulled, staged_img_config, _) = is_image_pulled(&repo, booted_imgref).await?;
+        let (img_pulled, staged_img_config, _) =
+            is_image_pulled(&repo, booted_imgref, storage).await?;
         manifest = staged_img_config.manifest;
 
         if let Some(cfg_verity) = img_pulled {

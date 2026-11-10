@@ -419,8 +419,24 @@ pub(crate) fn list_bootloader_entries(storage: &Storage) -> Result<Vec<Bootloade
 #[context("Getting container info")]
 pub(crate) async fn get_container_manifest_and_config(
     imgref: &ImageReference,
+    storage: Option<&Storage>,
 ) -> Result<(ImgConfigManifest, String)> {
     let mut config = crate::deploy::new_proxy_config();
+    if imgref.transport == ostree_ext::containers_image_proxy::Transport::ContainerStorage
+        && let Some(storage) = storage
+        && storage
+            .physical_root
+            .try_exists(crate::podstorage::CStorage::subpath())?
+    {
+        let mut cmd = std::process::Command::new(bootc_utils::skopeo_bin());
+        crate::podstorage::set_additional_image_store(
+            &mut cmd,
+            storage
+                .physical_root_path
+                .join(crate::podstorage::CStorage::subpath()),
+        );
+        config.skopeo_cmd = Some(cmd);
+    }
 
     ostree_ext::container::merge_default_container_proxy_opts(&mut config)?;
 

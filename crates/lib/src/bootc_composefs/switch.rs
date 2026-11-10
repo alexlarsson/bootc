@@ -128,7 +128,7 @@ pub(crate) async fn switch_composefs(
             )
         }
         None => {
-            let (image, img_config, _) = is_image_pulled(repo, &target_imgref).await?;
+            let (image, img_config, _) = is_image_pulled(repo, &target_imgref, storage).await?;
             (image, img_config.manifest)
         }
     };
