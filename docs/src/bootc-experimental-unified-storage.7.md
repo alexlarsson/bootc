@@ -34,6 +34,8 @@ Currently supported:
 - `bootc switch --experimental-unified-storage` to force the unified path
 - Onboarding running systems via `bootc image set-unified`
 - Auto-detection during upgrade/switch when image exists in bootc storage
+- Offline delta updates with `--from-delta` on composefs systems. The target is
+  reconstructed in composefs and then exported into bootc container storage.
 
 ### Why this isn't the default yet
 
@@ -188,8 +190,8 @@ unified storage model is documented in the rustdoc comments of the relevant sour
   for details
 - **Composefs conversion**: Native export currently requires OCI media types;
   Docker schema 2 images are not supported by the storage writer.
-- **Delta imports**: Delta updates with unified storage remain disabled. Exporting
-  the reconstructed image into bootc container storage is not yet integrated.
+- **Delta imports**: Unified delta updates require the composefs backend and
+  OCI media types. The ostree backend does not support unified delta updates.
 
 ## Related issues
 

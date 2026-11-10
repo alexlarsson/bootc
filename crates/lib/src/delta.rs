@@ -208,11 +208,11 @@ pub(crate) async fn open_opt(path: Option<&Utf8Path>) -> Result<Option<Delta>> {
     }
 }
 
-/// Reject `--from-delta` for an image that also has to be in containers-storage.
+/// Reject ostree delta imports that also have to populate containers-storage.
 pub(crate) fn reject_unified_storage(delta: &Delta, use_unified: bool) -> Result<()> {
     ensure!(
         !use_unified,
-        "Cannot apply delta {}: deltas with unified storage not supported.",
+        "Cannot apply delta {}: deltas with unified storage are not supported by the ostree backend.",
         delta.path,
     );
     Ok(())

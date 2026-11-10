@@ -120,7 +120,6 @@ pub(crate) async fn switch_composefs(
     // it up locally; without one we have to ask the registry.
     let (image, manifest) = match &delta {
         Some(delta) => {
-            crate::delta::reject_unified_storage(delta, do_upgrade_opts.use_unified)?;
             ensure_delta_source_present(repo, delta)?;
             (
                 lookup_config_splitstream(repo, delta.target_manifest().config().digest())?,

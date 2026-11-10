@@ -367,6 +367,23 @@ pub(crate) async fn do_upgrade(
             "Delta {} imported manifest {manifest_digest}, but it records {expected} as its target",
             delta.path,
         );
+        if opts.use_unified {
+            storage
+                .get_ensure_imgstore()?
+                .import_from_composefs(
+                    &booted_cfs.repo,
+                    &manifest_digest.parse()?,
+                    &imgref.image,
+                    composefs_storage::writer::ImportOptions {
+                        names: composefs_storage::writer::NamePolicy::Reassign,
+                        ..Default::default()
+                    },
+                    opts.quiet,
+                    opts.prog.clone(),
+                )
+                .await
+                .context("Exporting reconstructed delta image to unified storage")?;
+        }
     }
 
     // If the target image produces the same fs-verity digest as any existing
@@ -683,7 +700,6 @@ pub(crate) async fn upgrade_composefs(
     // it up locally; without one we have to ask the registry.
     let (img_pulled, mut manifest, manifest_digest) = match &delta {
         Some(delta) => {
-            crate::delta::reject_unified_storage(delta, do_upgrade_opts.use_unified)?;
             ensure_delta_source_present(repo, delta)?;
             (
                 lookup_config_splitstream(repo, delta.target_manifest().config().digest())?,

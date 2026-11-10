@@ -29,6 +29,9 @@
 //! (not a `Dir` fd) because composefs-ctl passes it to a child skopeo process.
 //! It is derived from the physical root fd via `/proc/self/fd/{fd}` readlink.
 //!
+//! Delta updates reverse this order: reconstruct the target in composefs, then
+//! export it to containers-storage before staging the deployment.
+//!
 //! ## Entry points
 //!
 //! - [`pull_composefs_repo`] — upgrade/switch on a composefs-booted system.
@@ -529,6 +532,8 @@ async fn pull_composefs_unified(
 /// resulting deployment tracks. composefs-ctl recognises the delta artifact
 /// from the layout's manifest and reconstructs the changed layers against the
 /// source image in the repository, failing if that image is absent.
+/// In unified mode, the caller then exports the reconstructed image into
+/// containers-storage after verifying its manifest digest.
 ///
 /// Checks for boot entries in the image and returns them.
 #[context("Pulling composefs repository")]
@@ -545,7 +550,6 @@ pub(crate) async fn pull_composefs_repo(
     let imgref = match delta {
         Some(delta) => {
             delta.validate_image_reference(spec_imgref)?;
-            crate::delta::reject_unified_storage(delta, use_unified)?;
             delta.pull_ref()?
         }
         None => spec_imgref.to_image_proxy_ref()?,
@@ -587,7 +591,7 @@ pub(crate) async fn pull_composefs_repo(
         );
     }
 
-    let pull_result = if use_unified {
+    let pull_result = if use_unified && delta.is_none() {
         // Create bootc-owned containers-storage on the rootfs.
         // Load SELinux policy from the running system so newly pulled layers
         // get the correct container_var_lib_t labels.

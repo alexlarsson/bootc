@@ -228,7 +228,6 @@ pub(crate) struct SwitchOpts {
         "from_downloaded",
         "transport",
         "mutate_in_place",
-        "unified_storage_exp",
         "enforce_container_sigpolicy",
     ])]
     pub(crate) from_delta: Option<Utf8PathBuf>,
@@ -3016,11 +3015,18 @@ mod tests {
 
     #[test]
     fn test_parse_from_delta() {
-        let o =
-            Opt::try_parse_from(["bootc", "switch", "--from-delta", "/d", "quay.io/e/x"]).unwrap();
-        match o {
-            Opt::Switch(o) => assert_eq!(o.from_delta.as_deref().unwrap(), "/d"),
-            o => panic!("Expected switch opts, not {o:?}"),
+        for unified in [false, true] {
+            let mut args = vec!["bootc", "switch", "--from-delta", "/d", "quay.io/e/x"];
+            if unified {
+                args.push("--experimental-unified-storage");
+            }
+            match Opt::try_parse_from(args).unwrap() {
+                Opt::Switch(o) => {
+                    assert_eq!(o.from_delta.as_deref().unwrap(), "/d");
+                    assert_eq!(o.unified_storage_exp, unified);
+                }
+                o => panic!("Expected switch opts, not {o:?}"),
+            }
         }
 
         // A delta carries its own image content; anything that says where else
@@ -3029,7 +3035,6 @@ mod tests {
         let conflicting: &[&[&str]] = &[
             &["switch", "--transport=oci-archive", "quay.io/e/x"],
             &["switch", "--mutate-in-place", "quay.io/e/x"],
-            &["switch", "--experimental-unified-storage", "quay.io/e/x"],
             &["switch", "--enforce-container-sigpolicy", "quay.io/e/x"],
             &["upgrade", "--check"],
             &["upgrade", "--tag=other"],
