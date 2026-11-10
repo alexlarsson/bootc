@@ -455,17 +455,19 @@ impl CStorage {
         .await?
     }
 
+    /// Prune images that have neither a rooted name nor a rooted config ID.
     #[context("Pruning")]
     pub(crate) async fn prune_except_roots(&self, roots: &HashSet<&str>) -> Result<Vec<String>> {
         let all_images = self.list_images().await?;
         tracing::debug!("Images total: {}", all_images.len(),);
         let mut garbage = Vec::new();
         for image in all_images {
-            if image
-                .names
-                .iter()
-                .flatten()
-                .all(|name| !roots.contains(name.as_str()))
+            if !roots.contains(image.id.as_str())
+                && image
+                    .names
+                    .iter()
+                    .flatten()
+                    .all(|name| !roots.contains(name.as_str()))
             {
                 garbage.push(image.id);
             }

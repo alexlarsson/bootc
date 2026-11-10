@@ -790,6 +790,12 @@ pub(crate) async fn composefs_gc(
 
     // Prune containers-storage: remove images not backing any live deployment.
     if !gc_opts.dry_run && !live_container_images.is_empty() {
+        // A delta upgrade may reassign a mutable tag. Keep the previous image
+        // by its config ID while a booted or rollback deployment still uses it.
+        for digest in &live_manifest_digests {
+            let image = composefs_oci::OciImage::open(&booted_cfs.repo, digest, None)?;
+            live_container_images.insert(image.config_digest().digest().to_owned());
+        }
         let subpath = crate::podstorage::CStorage::subpath();
         if sysroot.try_exists(&subpath).unwrap_or(false) {
             let run = Dir::open_ambient_dir("/run", cap_std_ext::cap_std::ambient_authority())?;
