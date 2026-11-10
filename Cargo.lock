@@ -377,6 +377,7 @@ dependencies = [
  "clap_mangen",
  "comfy-table",
  "composefs-ctl",
+ "composefs-storage",
  "etc-merge",
  "fn-error-context",
  "futures-util",

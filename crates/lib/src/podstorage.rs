@@ -235,6 +235,47 @@ pub(crate) fn ensure_floating_c_storage_initialized() {
 }
 
 impl CStorage {
+    /// Import the original OCI image from composefs into our overlay store.
+    #[context("Exporting composefs image to bootc storage")]
+    pub(crate) async fn import_from_composefs(
+        &self,
+        repo: &Arc<crate::store::ComposefsRepository>,
+        manifest: &composefs_ctl::composefs_oci::OciDigest,
+        name: &str,
+    ) -> Result<()> {
+        use composefs_ctl::composefs_oci;
+        use composefs_storage::writer::{ImportOptions, StoreLocation, import_image};
+
+        // The writer requires fully qualified names with an explicit tag or digest.
+        let name: ocidir::oci_spec::distribution::Reference = name.parse()?;
+        let destination =
+            StoreLocation::new(self.storage_root.try_clone()?, Some(self.run.try_clone()?));
+        let mut source = composefs_oci::ImageSource::open(repo, manifest).await?;
+        let (reporter, progress_task) = crate::bootc_composefs::progress::spawn(
+            false,
+            crate::progress_jsonl::ProgressWriter::default(),
+        );
+        let result = import_image(
+            &mut source,
+            destination,
+            &[name.to_string()],
+            ImportOptions::default(),
+            Some(reporter),
+        )
+        .await;
+        progress_task
+            .await
+            .context("Composefs progress task panicked")?;
+        let published = result?;
+        tracing::debug!(stats = ?published.stats, "Exported composefs image to containers-storage");
+
+        // Native imports need the same host policy labels as podman imports.
+        // Invalidate the stamp even for an existing store, since it now has new files.
+        self.storage_root.remove_file_optional(LABELED)?;
+        self.ensure_labeled()?;
+        Ok(())
+    }
+
     /// Create a `podman image` Command instance prepared to operate on our alternative
     /// root.
     pub(crate) fn new_image_cmd(&self) -> Result<Command> {

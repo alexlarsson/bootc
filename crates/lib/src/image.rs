@@ -3,8 +3,8 @@
 //! ## `bootc image set-unified`
 //!
 //! `set_unified_entrypoint` dispatches to `set_unified` (ostree backend) or
-//! `set_unified_composefs` (composefs backend). Both pull the currently booted
-//! image into bootc-owned containers-storage so that future upgrade/switch
+//! `set_unified_composefs` (composefs backend). Both populate bootc-owned
+//! containers-storage with the currently booted image so future upgrade/switch
 //! operations can use the unified storage path.
 //!
 //! In the planned three-store architecture (see [`crate::store`]), this will
@@ -268,7 +268,7 @@ pub(crate) async fn imgcmd_entrypoint(
     cmd.run_capture_stderr()
 }
 
-/// Re-pull the currently booted image into the bootc-owned container storage.
+/// Populate bootc-owned container storage with the currently booted image.
 ///
 /// This onboards the system to unified storage for host images so that
 /// upgrade/switch can use the unified path automatically when the image is present.
@@ -286,7 +286,7 @@ pub(crate) async fn set_unified_entrypoint() -> Result<()> {
     set_unified(&storage).await
 }
 
-/// Composefs implementation of set_unified: pull the booted image into
+/// Composefs implementation of set_unified: export the booted image into
 /// bootc-owned containers-storage so future upgrades use the unified
 /// (zero-copy) path automatically.
 #[context("Setting unified storage for composefs")]
@@ -302,66 +302,42 @@ async fn set_unified_composefs(
         .await
         .context("Getting composefs deployment status")?;
 
-    let imgref = host
-        .spec
+    let booted = host
+        .status
+        .booted
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No booted deployment found"))?;
+    let image = booted
         .image
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No image source specified for booted deployment"))?;
+        .ok_or_else(|| anyhow::anyhow!("Booted deployment is not from a container image"))?;
+    let imgref = &image.image;
+    let manifest = image
+        .image_digest
+        .parse()
+        .context("Parsing booted manifest digest")?;
 
     tracing::info!(
         message_id = SET_UNIFIED_CFS_JOURNAL_ID,
         bootc.image.reference = &imgref.image,
         bootc.image.transport = &imgref.transport,
-        "Pulling booted image into bootc containers-storage for unified storage: {}",
+        "Exporting booted image into bootc containers-storage for unified storage: {}",
         imgref,
     );
 
     let imgstore = storage.get_ensure_imgstore()?;
 
-    // Check if the image is already in bootc storage
-    let img_transport = imgref.to_transport_image()?;
-    if imgstore.exists(&img_transport).await? {
-        println!("Image {} is already in bootc storage.", imgref.image);
-        tracing::info!(
-            message_id = SET_UNIFIED_CFS_JOURNAL_ID,
-            bootc.status = "already_unified",
-            "Image already present in bootc containers-storage",
-        );
-        return Ok(());
-    }
-
-    // Pull into bootc-owned containers-storage.
-    // If the image exists in the host's default containers-storage
-    // (/var/lib/containers), copy from there (avoids network).
-    // Otherwise, pull from the original transport.
-    let image_in_host = image_exists_in_host_storage(&imgref.image).await?;
-
-    if image_in_host {
-        tracing::info!(
-            "Image {} found in host containers-storage; copying to bootc storage",
-            &imgref.image
-        );
-        let image_name = imgref.image.clone();
-        let copy_msg = format!("Copying {} to bootc storage", &image_name);
-        async_task_with_spinner(&copy_msg, async move {
-            imgstore.pull_from_host_storage(&image_name).await
-        })
+    // Select the deployed digest, even if a mutable source tag has since moved.
+    // The writer reuses existing layers and image records on repeated conversions.
+    imgstore
+        .import_from_composefs(&booted_cfs.repo, &manifest, &imgref.image)
         .await?;
-    } else {
-        let pull_ref = img_transport;
-        let pull_msg = format!("Pulling {} to bootc storage", &pull_ref);
-        async_task_with_spinner(&pull_msg, async move {
-            imgstore.pull_with_progress(&pull_ref).await
-        })
-        .await?;
-    }
 
     // Verify
     let imgstore = storage.get_ensure_imgstore()?;
-    let img_transport = imgref.to_transport_image()?;
-    if !imgstore.exists(&img_transport).await? {
+    if !imgstore.exists(&imgref.image).await? {
         anyhow::bail!(
-            "Image was pulled but not found in bootc storage: {}",
+            "Image was exported but not found in bootc storage: {}",
             &imgref.image
         );
     }

@@ -37,6 +37,7 @@ clap = { workspace = true, features = ["derive","cargo"] }
 clap_complete = "4"
 clap_mangen = { workspace = true, optional = true }
 composefs-ctl = { workspace = true }
+composefs-storage = { workspace = true }
 fn-error-context = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }

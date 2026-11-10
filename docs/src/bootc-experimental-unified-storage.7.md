@@ -71,7 +71,11 @@ To onboard an existing system to unified storage, use:
 bootc image set-unified
 ```
 
-This re-pulls the currently booted image from its original source into the
+On composefs systems, this exports the currently booted OCI image directly
+from the local composefs repository, preserving its manifest and configuration.
+It works offline and uses reflinks where supported, falling back to copying
+file payloads otherwise. Repeating the command reuses existing layers.
+On ostree systems, this re-pulls the image from its original source into the
 bootc-owned container storage. After this, future `bootc upgrade` and
 `bootc switch` operations will automatically use the unified storage path
 when the image is detected in bootc storage.
@@ -182,9 +186,10 @@ unified storage model is documented in the rustdoc comments of the relevant sour
 - **Garbage collection**: Images in bootc storage are garbage collected based
   on deployment references; see [logically-bound-images.md](bootc-logically-bound-images.7.md)
   for details
-- **Delta imports**: Delta imports builds layers directly in the composefs repo, and
-  there is currently no operation to allow pusing from the composefs repo to the
-  bootc container storage.
+- **Composefs conversion**: Native export currently requires OCI media types;
+  Docker schema 2 images are not supported by the storage writer.
+- **Delta imports**: Delta updates with unified storage remain disabled. Exporting
+  the reconstructed image into bootc container storage is not yet integrated.
 
 ## Related issues
 
