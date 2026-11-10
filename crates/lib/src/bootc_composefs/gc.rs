@@ -691,6 +691,17 @@ pub(crate) async fn composefs_gc(
                     .parse::<ostree_ext::container::OstreeImageReference>()
                     .map(|r| r.imgref.name)
                     .unwrap_or_else(|_| container_ref.clone());
+                // Podman records fully qualified names with explicit tags, even
+                // when the deployment was created from e.g. localhost/bootc.
+                let image_name = match image_name
+                    .parse::<ocidir::oci_spec::distribution::Reference>()
+                {
+                    Ok(reference) => reference.to_string(),
+                    Err(error) => {
+                        tracing::debug!(%image_name, %error, "Keeping non-registry GC reference unchanged");
+                        image_name
+                    }
+                };
                 live_container_images.insert(image_name);
             }
 
