@@ -164,7 +164,6 @@ execute:
     how: fmf
     test:
       - /tmt/tests/tests/test-31-switch-to-unified
-  extra-fixme_skip_if_composefs: true
 
 /plan-32-install-to-filesystem-var-mount:
   summary: Test bootc install to-filesystem with separate /var mount

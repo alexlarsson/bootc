@@ -2,14 +2,12 @@
 # tmt:
 #   summary: Onboard to unified storage, build derived image, and switch to it
 #   duration: 30m
-# extra:
-#   fixme_skip_if_composefs: true
 #
 use std assert
 use tap.nu
 
-# Multi-boot test: boot 0 onboards to unified storage and builds a derived image;
-# boot 1 verifies we booted into the derived image using containers-storage
+# Composefs exports directly from its repository; ostree first switches to a
+# local image. After conversion, build a derived image and reboot into it.
 
 # This code runs on *each* boot - capture status for verification
 bootc status
@@ -17,6 +15,15 @@ let st = bootc status --json | from json
 let booted = $st.status.booted.image
 
 def main [] {
+  if (tap is_composefs) {
+    match $env.TMT_REBOOT_COUNT? {
+      null | "0" => second_boot,
+      "1" => third_boot,
+      $o => { error make { msg: $"Invalid TMT_REBOOT_COUNT ($o)" } },
+    }
+    return
+  }
+
   match $env.TMT_REBOOT_COUNT? {
     null | "0" => first_boot,
     "1" => second_boot,
@@ -38,9 +45,24 @@ def first_boot [] {
 }
 
 def second_boot [] {
+  tap begin "onboard to unified storage, build, and switch to a derived image"
 
-  # Onboard to unified storage - this pulls the booted image into bootc storage
-  bootc image set-unified
+  let base_image = if (tap is_composefs) { $booted.image.image } else { "localhost/bootc" }
+
+  if (tap is_composefs) {
+    # Export the deployed image without access to its registry.
+    unshare --net bootc image set-unified
+    let exported = bootc image cmd list --no-trunc --filter $"reference=($base_image)" --format json | from json | first
+    assert equal $exported.Digest $booted.imageDigest
+
+    # Repeating the conversion must preserve image identity.
+    unshare --net bootc image set-unified
+    let repeated = bootc image cmd list --no-trunc --filter $"reference=($base_image)" --format json | from json | first
+    assert equal $repeated.Id $exported.Id
+    assert equal $repeated.Digest $exported.Digest
+  } else {
+    bootc image set-unified
+  }
 
   # Verify bootc-owned store has the image
   bootc image cmd list
@@ -57,9 +79,10 @@ def second_boot [] {
 
   # Build a derived image with a marker file to verify we switched
   # Use bootc image cmd build which builds directly into bootc storage
-  $"FROM localhost/bootc
+  let containerfile = $"FROM ($base_image) as base
 RUN echo 'unified-storage-test-marker' > /usr/share/unified-storage-test.txt
-" | save Dockerfile
+"
+  (tap make_uki_containerfile $containerfile) | save Dockerfile
 
   bootc image cmd build -t localhost/bootc-unified-derived .
 
@@ -88,6 +111,9 @@ def third_boot [] {
   # Verify that bootc storage is accessible
   print "Listing images in bootc storage:"
   bootc image cmd list
+
+  let derived = bootc image cmd list --filter reference=localhost/bootc-unified-derived --format json | from json
+  assert equal ($derived | length) 1 "Derived image must survive garbage collection in bootc storage"
 
   # Verify that podman can see bootc storage as additional image store
   print "Testing podman access to bootc storage"
