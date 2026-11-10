@@ -330,7 +330,14 @@ async fn set_unified_composefs(
     // Select the deployed digest, even if a mutable source tag has since moved.
     // The writer reuses existing layers and image records on repeated conversions.
     imgstore
-        .import_from_composefs(&booted_cfs.repo, &manifest, &imgref.image)
+        .import_from_composefs(
+            &booted_cfs.repo,
+            &manifest,
+            &imgref.image,
+            Default::default(),
+            false,
+            Default::default(),
+        )
         .await?;
 
     // Verify

@@ -25,6 +25,7 @@ use cap_std_ext::cap_tempfile::TempDir;
 use cap_std_ext::cmdext::{CapStdExtCommandExt, CmdFds};
 use cap_std_ext::dirext::CapStdExtDirExt;
 use cap_std_ext::{cap_std, cap_tempfile};
+use composefs_storage::writer::{ImportOptions, StoreLocation, import_image};
 use fn_error_context::context;
 use ostree_ext::container::{ImageReference, Transport};
 use ostree_ext::ostree::{self};
@@ -242,24 +243,23 @@ impl CStorage {
         repo: &Arc<crate::store::ComposefsRepository>,
         manifest: &composefs_ctl::composefs_oci::OciDigest,
         name: &str,
+        options: ImportOptions,
+        quiet: bool,
+        prog: crate::progress_jsonl::ProgressWriter,
     ) -> Result<()> {
         use composefs_ctl::composefs_oci;
-        use composefs_storage::writer::{ImportOptions, StoreLocation, import_image};
 
         // The writer requires fully qualified names with an explicit tag or digest.
         let name: ocidir::oci_spec::distribution::Reference = name.parse()?;
         let destination =
             StoreLocation::new(self.storage_root.try_clone()?, Some(self.run.try_clone()?));
         let mut source = composefs_oci::ImageSource::open(repo, manifest).await?;
-        let (reporter, progress_task) = crate::bootc_composefs::progress::spawn(
-            false,
-            crate::progress_jsonl::ProgressWriter::default(),
-        );
+        let (reporter, progress_task) = crate::bootc_composefs::progress::spawn(quiet, prog);
         let result = import_image(
             &mut source,
             destination,
             &[name.to_string()],
-            ImportOptions::default(),
+            options,
             Some(reporter),
         )
         .await;
