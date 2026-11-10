@@ -463,13 +463,18 @@ async fn pull_composefs_unified(
 
     // Stage 1: get the image into bootc-owned containers-storage.
     if imgref.transport == containers_image_proxy::Transport::ContainerStorage {
-        // The image is in the default containers-storage (/var/lib/containers/storage).
-        // Copy it into bootc-owned storage.
-        tracing::info!("Unified pull: copying {image} from host containers-storage");
-        imgstore
-            .pull_from_host_storage(image)
-            .await
-            .context("Copying image from host containers-storage into bootc storage")?;
+        // Prefer the host's image when present, so rebuilding a mutable tag there
+        // still updates it. Images built with `bootc image cmd build` only exist
+        // in our store and can be imported directly.
+        if crate::image::image_exists_in_host_storage(image).await?
+            || !imgstore.exists(image).await?
+        {
+            tracing::info!("Unified pull: copying {image} from host containers-storage");
+            imgstore
+                .pull_from_host_storage(image)
+                .await
+                .context("Copying image from host containers-storage into bootc storage")?;
+        }
     } else {
         // For registry (docker://), oci:, docker-daemon:, etc. — pull
         // via the native podman API with streaming progress display.
