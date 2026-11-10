@@ -680,9 +680,15 @@ pub(crate) async fn image_exists_in_unified_storage(
     store: &Storage,
     imgref: &ImageReference,
 ) -> Result<bool> {
+    if !matches!(
+        imgref.transport()?,
+        ostree_container::Transport::Registry | ostree_container::Transport::ContainerStorage
+    ) {
+        return Ok(false);
+    }
     let imgstore = store.get_ensure_imgstore()?;
-    let image_ref_str = imgref.to_transport_image()?;
-    imgstore.exists(&image_ref_str).await
+    // Podman expects a local name without a containers-storage transport prefix.
+    imgstore.exists(&imgref.image).await
 }
 
 /// Unified approach: Use bootc's CStorage to pull the image, then prepare from containers-storage.
